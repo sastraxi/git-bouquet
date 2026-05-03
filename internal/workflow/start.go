@@ -121,17 +121,22 @@ func Start(opts StartOpts) error {
 }
 
 func bootstrapRerere(repo *git.Repo) error {
-	val, err := repo.ConfigGet("rerere.enabled")
-	if err != nil {
-		return err
+	for _, kv := range [...]struct{ key, want string }{
+		{"rerere.enabled", "true"},
+		{"rerere.autoupdate", "true"},
+	} {
+		val, err := repo.ConfigGet(kv.key)
+		if err != nil {
+			return err
+		}
+		if val == kv.want || val == "1" {
+			continue
+		}
+		if err := repo.ConfigSet(kv.key, kv.want); err != nil {
+			return err
+		}
+		info("enabled %s at repo scope", kv.key)
 	}
-	if val == "true" || val == "1" {
-		return nil
-	}
-	if err := repo.ConfigSet("rerere.enabled", "true"); err != nil {
-		return err
-	}
-	info("enabled rerere.enabled at repo scope")
 	return nil
 }
 
@@ -215,9 +220,23 @@ func runMergeLoop(env *Env, st *state.State, dryRun bool) error {
 				warn("\nResolve conflicts in %s, `git add` them, then run `git bouquet continue`.", env.Paths.WorktreeDir)
 				return errExitConflict
 			}
-			return fmt.Errorf("merging %s: %w", leaf, err)
+			// Merge failed but nothing is unmerged: rerere replayed every
+			// conflict and (with autoupdate) staged the resolutions. Seal
+			// the merge ourselves.
+			inMerge, merr := wt.MergeInProgress()
+			if merr != nil {
+				return merr
+			}
+			if !inMerge {
+				return fmt.Errorf("merging %s: %w", leaf, err)
+			}
+			if cerr := wt.Run("commit", "--no-edit"); cerr != nil {
+				return fmt.Errorf("sealing rerere-resolved merge of %s: %w", leaf, cerr)
+			}
+			fmt.Println("ok (rerere)")
+		} else {
+			fmt.Println("ok")
 		}
-		fmt.Println("ok")
 		st.NextIndex++
 		if err := state.Save(env.Paths, st); err != nil {
 			return err

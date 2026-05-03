@@ -27,6 +27,7 @@ base:   main              # branch to start each rebuild from
 merge:                    # globs; expanded against local branch names
   - feat/*
   - test/*
+  - "!feat/wip-*"           # gitignore-style negation drops matches
 ```
 
 To gate releases on tests, run them yourself after `git bouquet start`
@@ -48,6 +49,23 @@ git bouquet status                    # where are we
 - `--pull`  fast-forward `base` and each leaf from their upstreams first.
 - `--sync`  run `git town sync -s` on each leaf first (requires `git-town`).
 - `--dry-run`  do everything except the final commit + branch update.
+
+### Resolving conflicts
+
+When `start` (or `continue`) stops at a conflict, the worktree is a normal
+git working tree — just `cd` into it:
+
+```sh
+cd .git/bouquet/worktree
+# edit conflicted files, then
+git add <resolved files>
+cd ../../..             # back to repo root
+git bouquet continue
+```
+
+Don't `git commit` yourself — `bouquet continue` seals the in-progress
+merge with the default message and resumes the loop. `rerere` records every
+resolution, so the same conflict will replay automatically next time.
 
 ## How it works
 
