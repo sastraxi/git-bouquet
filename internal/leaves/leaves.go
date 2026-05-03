@@ -1,10 +1,8 @@
-// Package leaves expands merge globs into a deterministic, ancestor-trimmed,
-// alphabetically-sorted leaf list.
+// Package leaves expands merge globs into an ancestor-trimmed leaf list.
 package leaves
 
 import (
 	"fmt"
-	"sort"
 
 	"github.com/gobwas/glob"
 )
@@ -17,13 +15,21 @@ type Source interface {
 }
 
 // Resolve expands the given glob patterns against local branches, drops
-// branches matching `excludes`, removes ancestors (if A is an ancestor of B
-// and both are in the set, drop A), and sorts the result alphabetically.
+// branches matching `excludes`, and removes ancestors (if A is an ancestor of
+// B and both are in the set, drop A).
+//
+// Patterns are processed left-to-right, preserving insertion order:
+//   - A positive pattern appends every matching branch not yet in the list.
+//   - A negative pattern (prefixed with `!`) removes all matching branches
+//     from the list accumulated so far.
+//
+// This means the order of entries in .bouquet.yaml controls merge order.
+// Within a single glob expansion the order follows LocalBranches() (typically
+// alphabetical, but not guaranteed — callers that need strict determinism
+// should use explicit branch names rather than globs).
 //
 // Glob semantics: gobwas/glob with no separator, so `*` crosses `/` to match
-// git refspec conventions (e.g. `feat/*` matches `feat/a/b`). Patterns
-// prefixed with `!` are negative — any branch matching a negative pattern
-// is dropped from the result regardless of include matches.
+// git refspec conventions (e.g. `feat/*` matches `feat/a/b`).
 func Resolve(src Source, patterns, excludes []string) ([]string, error) {
 	branches, err := src.LocalBranches()
 	if err != nil {
@@ -34,59 +40,50 @@ func Resolve(src Source, patterns, excludes []string) ([]string, error) {
 		excludeSet[e] = struct{}{}
 	}
 
-	var includes, negatives []glob.Glob
+	var list []string
+	seen := make(map[string]struct{})
+
 	for _, p := range patterns {
-		neg := false
+		neg := len(p) > 0 && p[0] == '!'
 		raw := p
-		if len(raw) > 0 && raw[0] == '!' {
-			neg = true
-			raw = raw[1:]
+		if neg {
+			raw = p[1:]
 		}
 		g, err := glob.Compile(raw)
 		if err != nil {
 			return nil, fmt.Errorf("invalid glob %q: %w", p, err)
 		}
+
 		if neg {
-			negatives = append(negatives, g)
+			kept := list[:0:0]
+			for _, b := range list {
+				if g.Match(b) {
+					delete(seen, b)
+				} else {
+					kept = append(kept, b)
+				}
+			}
+			list = kept
 		} else {
-			includes = append(includes, g)
-		}
-	}
-
-	matched := map[string]struct{}{}
-	for _, b := range branches {
-		if _, skip := excludeSet[b]; skip {
-			continue
-		}
-		negated := false
-		for _, ng := range negatives {
-			if ng.Match(b) {
-				negated = true
-				break
-			}
-		}
-		if negated {
-			continue
-		}
-		for _, ig := range includes {
-			if ig.Match(b) {
-				matched[b] = struct{}{}
-				break
+			for _, b := range branches {
+				if _, skip := excludeSet[b]; skip {
+					continue
+				}
+				if _, already := seen[b]; already {
+					continue
+				}
+				if g.Match(b) {
+					list = append(list, b)
+					seen[b] = struct{}{}
+				}
 			}
 		}
 	}
-
-	list := make([]string, 0, len(matched))
-	for b := range matched {
-		list = append(list, b)
-	}
-	sort.Strings(list)
 
 	trimmed, err := trimAncestors(src, list)
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(trimmed)
 	return trimmed, nil
 }
 

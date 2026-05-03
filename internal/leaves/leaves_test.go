@@ -58,10 +58,16 @@ func TestResolve(t *testing.T) {
 			want:     []string{"feat/a", "test/x"},
 		},
 		{
-			name:     "alphabetical sort",
+			name:     "glob expansion preserves git branch order",
 			src:      newFake("feat/zebra", "feat/apple", "feat/mango"),
 			patterns: []string{"feat/*"},
-			want:     []string{"feat/apple", "feat/mango", "feat/zebra"},
+			want:     []string{"feat/zebra", "feat/apple", "feat/mango"},
+		},
+		{
+			name: "explicit entry after negation appends to end",
+			src:  newFake("feat/bouquet", "feat/apple", "feat/mango"),
+			patterns: []string{"feat/*", "!feat/bouquet", "feat/bouquet"},
+			want: []string{"feat/apple", "feat/mango", "feat/bouquet"},
 		},
 		{
 			name:     "positional excludes drop matches",
