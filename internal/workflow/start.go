@@ -176,6 +176,13 @@ func pullBranch(repo *git.Repo, branch string) error {
 	if !isAnc {
 		return fmt.Errorf("cannot fast-forward %s: local has diverged from %s", branch, upstream)
 	}
+	// If the branch is currently checked out, update-ref would move the ref
+	// without touching the working tree or index, leaving them stale. Use
+	// merge --ff-only so the working tree is updated atomically.
+	currentRef, cerr := repo.Output("symbolic-ref", "--quiet", "HEAD")
+	if cerr == nil && currentRef == "refs/heads/"+branch {
+		return repo.Quiet("merge", "--ff-only", upstreamSHA)
+	}
 	return repo.Quiet("update-ref", "refs/heads/"+branch, upstreamSHA, localSHA)
 }
 

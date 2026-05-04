@@ -505,6 +505,68 @@ func TestStart_DeletedByThem_AutoResolved(t *testing.T) {
 	}
 }
 
+// TestStart_Pull_DoesNotDirtyMainWorktree is the regression test for the bug
+// where pullBranch fast-forwards a branch ref via git-update-ref without
+// touching the working tree or index. When the pulled branch is the currently
+// checked-out branch, HEAD moves forward but the files on disk stay at the old
+// SHA, leaving the working tree dirty after an otherwise-successful bouquet
+// commit.
+func TestStart_Pull_DoesNotDirtyMainWorktree(t *testing.T) {
+	repo, remote := setupRepoWithRemote(t, "main")
+	t.Chdir(repo)
+
+	gitIn := func(args ...string) {
+		t.Helper()
+		c := exec.Command("git", args...)
+		c.Dir = repo
+		c.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	// Create a local feat branch off main (no upstream — pullBranch skips it).
+	gitIn("checkout", "-q", "-b", "feat/a")
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn("add", "a.txt")
+	gitIn("commit", "-q", "-m", "feat/a")
+	gitIn("checkout", "-q", "main")
+
+	// Advance remote main so pullBranch has a new commit to fast-forward to.
+	// advanceRemote writes a new version of "f", so after update-ref, the
+	// working tree would show "f" as modified — that's the bug.
+	advanceRemote(t, remote, "main")
+
+	writeBouquetYAML(t, repo, "release/current", "main", []string{"feat/*"})
+
+	if err := Start(StartOpts{Pull: true}); err != nil {
+		t.Fatalf("Start --pull: %v", err)
+	}
+
+	// Working tree must have no changes to tracked files. We filter out
+	// untracked lines (??) because .bouquet.yaml is intentionally untracked
+	// in tests; the bug we're guarding is that pullBranch leaves tracked
+	// files stale (e.g. "M  f") after fast-forwarding the checked-out branch.
+	out, err := exec.Command("git", "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dirty []string
+	for line := range strings.SplitSeq(string(out), "\n") {
+		if !strings.HasPrefix(line, "??") && strings.TrimSpace(line) != "" {
+			dirty = append(dirty, line)
+		}
+	}
+	if len(dirty) > 0 {
+		t.Errorf("tracked files dirty after successful Start --pull:\n%s", strings.Join(dirty, "\n"))
+	}
+}
+
 func TestSetup_NoConfig(t *testing.T) {
 	// A bare git repo with no .bouquet.yaml.
 	dir := t.TempDir()
