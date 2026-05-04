@@ -131,6 +131,27 @@ func TestStart_HappyPath(t *testing.T) {
 	}
 }
 
+func TestStart_NoopWhenTreeUnchanged(t *testing.T) {
+	dir := setupRepo(t, "main", map[string]map[string]string{
+		"feat/a": {"a.txt": "alpha\n"},
+	})
+	writeBouquetYAML(t, dir, "release/current", "main", []string{"feat/*"})
+
+	if err := Start(StartOpts{}); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	sha1 := mustHead(t, "release/current")
+
+	if err := Start(StartOpts{}); err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	sha2 := mustHead(t, "release/current")
+
+	if sha1 != sha2 {
+		t.Errorf("release/current moved from %s to %s despite no change", sha1, sha2)
+	}
+}
+
 func TestStart_Idempotent(t *testing.T) {
 	dir := setupRepo(t, "main", map[string]map[string]string{
 		"feat/a": {"a.txt": "alpha\n"},
@@ -407,6 +428,81 @@ func TestContinue_StillUnmerged(t *testing.T) {
 		t.Errorf("Continue with unresolved paths should signal conflict, got %v", err)
 	}
 	_ = dir
+}
+
+// modifyDeleteRepo builds a repo where one branch deletes old.py and another
+// modifies it. deleterFirst controls merge order: if true, the deleting branch
+// is merged first (DU conflict on the second merge); if false, the modifier is
+// first (UD conflict on the second merge).
+func modifyDeleteRepo(t *testing.T, deleterFirst bool) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	run := func(args ...string) {
+		t.Helper()
+		c := exec.Command("git", args...)
+		c.Dir = dir
+		c.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "t@t")
+	run("config", "user.name", "test")
+	run("config", "commit.gpgsign", "false")
+
+	if err := os.WriteFile(filepath.Join(dir, "old.py"), []byte("old content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "old.py")
+	run("commit", "-q", "-m", "base init")
+
+	run("checkout", "-q", "-b", "feat/deleter", "main")
+	run("rm", "old.py")
+	run("commit", "-q", "-m", "feat/deleter: remove old.py")
+
+	run("checkout", "-q", "-b", "feat/modifier", "main")
+	if err := os.WriteFile(filepath.Join(dir, "old.py"), []byte("modified content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "old.py")
+	run("commit", "-q", "-m", "feat/modifier: modify old.py")
+
+	run("checkout", "-q", "main")
+	merge := []string{"feat/deleter", "feat/modifier"}
+	if !deleterFirst {
+		merge = []string{"feat/modifier", "feat/deleter"}
+	}
+	writeBouquetYAML(t, dir, "release/current", "main", merge)
+	return dir
+}
+
+func TestStart_DeletedByUs_AutoResolved(t *testing.T) {
+	// DU: deleter merged first → worktree has no old.py, modifier tries to add changes.
+	_ = modifyDeleteRepo(t, true)
+	if err := Start(StartOpts{}); err != nil {
+		t.Fatalf("Start should auto-resolve DU conflict, got: %v", err)
+	}
+	if out, err := exec.Command("git", "show", "release/current:old.py").Output(); err == nil {
+		t.Errorf("old.py should be absent from snapshot, got: %s", out)
+	}
+}
+
+func TestStart_DeletedByThem_AutoResolved(t *testing.T) {
+	// UD: modifier merged first → worktree has old.py, deleter branch removes it.
+	_ = modifyDeleteRepo(t, false)
+	if err := Start(StartOpts{}); err != nil {
+		t.Fatalf("Start should auto-resolve UD conflict, got: %v", err)
+	}
+	if out, err := exec.Command("git", "show", "release/current:old.py").Output(); err == nil {
+		t.Errorf("old.py should be absent from snapshot, got: %s", out)
+	}
 }
 
 func TestSetup_NoConfig(t *testing.T) {

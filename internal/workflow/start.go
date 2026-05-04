@@ -211,6 +211,19 @@ func runMergeLoop(env *Env, st *state.State, dryRun bool) error {
 		fmt.Printf("  %s... ", leaf)
 		err := wt.Run("merge", "--no-ff", "--no-edit", leaf)
 		if err != nil {
+			// Auto-resolve modify/delete conflicts where our side deleted the
+			// file. Rerere cannot cache these, but the deletion is always
+			// intentional in a bouquet workflow.
+			deleted, derr := wt.ModifyDeletePaths()
+			if derr != nil {
+				return derr
+			}
+			for _, p := range deleted {
+				if rerr := wt.Quiet("rm", "-f", p); rerr != nil {
+					return fmt.Errorf("auto-rm deleted-by-us %s: %w", p, rerr)
+				}
+			}
+
 			unmerged, uerr := wt.HasUnmergedPaths()
 			if uerr != nil {
 				return uerr
@@ -221,8 +234,8 @@ func runMergeLoop(env *Env, st *state.State, dryRun bool) error {
 				return errExitConflict
 			}
 			// Merge failed but nothing is unmerged: rerere replayed every
-			// conflict and (with autoupdate) staged the resolutions. Seal
-			// the merge ourselves.
+			// conflict and (with autoupdate) staged the resolutions, or all
+			// conflicts were deleted-by-us. Seal the merge ourselves.
 			inMerge, merr := wt.MergeInProgress()
 			if merr != nil {
 				return merr
@@ -233,7 +246,11 @@ func runMergeLoop(env *Env, st *state.State, dryRun bool) error {
 			if cerr := wt.Run("commit", "--no-edit"); cerr != nil {
 				return fmt.Errorf("sealing rerere-resolved merge of %s: %w", leaf, cerr)
 			}
-			fmt.Println("ok (rerere)")
+			if len(deleted) > 0 {
+				fmt.Printf("ok (deleted %d file(s))\n", len(deleted))
+			} else {
+				fmt.Println("ok (rerere)")
+			}
 		} else {
 			fmt.Println("ok")
 		}
@@ -259,6 +276,21 @@ func finishRebuild(env *Env, st *state.State, dryRun bool) error {
 	if err != nil {
 		return err
 	}
+
+	// Skip the commit entirely if the assembled tree is identical to the
+	// current target tip — nothing changed.
+	if st.PrevTargetSHA != "" {
+		prevTree, err := env.Repo.Output("rev-parse", st.PrevTargetSHA+"^{tree}")
+		if err != nil {
+			return err
+		}
+		if prevTree == tree {
+			cleanup(env)
+			info("\n%s is already up to date", st.Target)
+			return nil
+		}
+	}
+
 	parent := st.PrevTargetSHA
 	if parent == "" {
 		parent = st.BaseSHA
@@ -278,12 +310,7 @@ func finishRebuild(env *Env, st *state.State, dryRun bool) error {
 		}
 	}
 
-	if err := env.Repo.Quiet("worktree", "remove", "--force", env.Paths.WorktreeDir); err != nil {
-		warn("worktree cleanup failed: %v", err)
-	}
-	if err := state.Clear(env.Paths); err != nil {
-		warn("state cleanup failed: %v", err)
-	}
+	cleanup(env)
 
 	short := newSHA
 	if len(short) > 12 {
@@ -295,6 +322,15 @@ func finishRebuild(env *Env, st *state.State, dryRun bool) error {
 	}
 	info("\ncommitted %s %s (parent %s)", st.Target, short, parentShort)
 	return nil
+}
+
+func cleanup(env *Env) {
+	if err := env.Repo.Quiet("worktree", "remove", "--force", env.Paths.WorktreeDir); err != nil {
+		warn("worktree cleanup failed: %v", err)
+	}
+	if err := state.Clear(env.Paths); err != nil {
+		warn("state cleanup failed: %v", err)
+	}
 }
 
 func buildCommitMessage(st *state.State) string {

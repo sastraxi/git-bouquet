@@ -155,6 +155,24 @@ func (r *Repo) HasUnmergedPaths() (bool, error) {
 	return out != "", nil
 }
 
+// ModifyDeletePaths returns paths with a modify/delete conflict in either
+// direction: "DU" (we deleted, they modified) or "UD" (they deleted, we
+// modified). Both cases resolve identically with `git rm`. Rerere cannot
+// cache either.
+func (r *Repo) ModifyDeletePaths() ([]string, error) {
+	out, err := r.Output("status", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "DU ") || strings.HasPrefix(line, "UD ") {
+			paths = append(paths, line[3:])
+		}
+	}
+	return paths, nil
+}
+
 // MergeInProgress reports whether MERGE_HEAD exists in this repo/worktree.
 func (r *Repo) MergeInProgress() (bool, error) {
 	gitDir, err := r.Output("rev-parse", "--git-dir")
