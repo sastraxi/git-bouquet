@@ -96,6 +96,16 @@ func Start(opts StartOpts) error {
 		if sha == "" {
 			return fmt.Errorf("leaf %q does not exist (was it deleted between resolve and rev-parse?)", b)
 		}
+		// All leaves must be descendants of base so that rerere conflict
+		// contexts are stable across rebuilds. A leaf that doesn't share base
+		// as an ancestor produces unpredictable three-way merge inputs.
+		isDesc, err := env.Repo.IsAncestor(baseSHA, sha)
+		if err != nil {
+			return err
+		}
+		if !isDesc {
+			return fmt.Errorf("leaf %q is not a descendant of base %q — ensure every leaf branches off the base in git history", b, env.Config.Base)
+		}
 		leafSHAs[b] = sha
 	}
 

@@ -528,19 +528,22 @@ func TestStart_Pull_DoesNotDirtyMainWorktree(t *testing.T) {
 		}
 	}
 
-	// Create a local feat branch off main (no upstream — pullBranch skips it).
-	gitIn("checkout", "-q", "-b", "feat/a")
+	// Advance remote main first, then fetch so we can branch feat/a off the
+	// new tip. This ensures feat/a is a descendant of the post-pull base SHA
+	// (which is required by the leaf-ancestry constraint).
+	advanceRemote(t, remote, "main")
+	gitIn("fetch", "-q", "origin")
+
+	// Create feat/a off FETCH_HEAD (the new remote main tip, SHA2).
+	// Local main is still at SHA1 — that's the whole point: Start --pull must
+	// advance local main to SHA2 AND update the working tree to match.
+	gitIn("checkout", "-q", "-b", "feat/a", "FETCH_HEAD")
 	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("alpha\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitIn("add", "a.txt")
 	gitIn("commit", "-q", "-m", "feat/a")
 	gitIn("checkout", "-q", "main")
-
-	// Advance remote main so pullBranch has a new commit to fast-forward to.
-	// advanceRemote writes a new version of "f", so after update-ref, the
-	// working tree would show "f" as modified — that's the bug.
-	advanceRemote(t, remote, "main")
 
 	writeBouquetYAML(t, repo, "release/current", "main", []string{"feat/*"})
 
@@ -564,6 +567,79 @@ func TestStart_Pull_DoesNotDirtyMainWorktree(t *testing.T) {
 	}
 	if len(dirty) > 0 {
 		t.Errorf("tracked files dirty after successful Start --pull:\n%s", strings.Join(dirty, "\n"))
+	}
+}
+
+func TestStart_LeafNotDescendantOfBase_Rejected(t *testing.T) {
+	// Create a repo where one leaf branches off a different commit (not base),
+	// simulating e.g. a branch accidentally rooted on main instead of the
+	// release base. git bouquet must reject this before touching the worktree.
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	run := func(args ...string) {
+		t.Helper()
+		c := exec.Command("git", args...)
+		c.Dir = dir
+		c.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "t@t")
+	run("config", "user.name", "test")
+	run("config", "commit.gpgsign", "false")
+
+	// main commit — this is NOT the bouquet base.
+	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "README")
+	run("commit", "-q", "-m", "main init")
+
+	// base branches off main.
+	run("checkout", "-q", "-b", "base", "main")
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "base.txt")
+	run("commit", "-q", "-m", "base commit")
+
+	// feat/good branches off base — this is fine.
+	run("checkout", "-q", "-b", "feat/good", "base")
+	if err := os.WriteFile(filepath.Join(dir, "good.txt"), []byte("good\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "good.txt")
+	run("commit", "-q", "-m", "feat/good")
+
+	// feat/bad branches off main, NOT base — this should be rejected.
+	run("checkout", "-q", "-b", "feat/bad", "main")
+	if err := os.WriteFile(filepath.Join(dir, "bad.txt"), []byte("bad\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "bad.txt")
+	run("commit", "-q", "-m", "feat/bad rooted on main, not base")
+
+	run("checkout", "-q", "base")
+	writeBouquetYAML(t, dir, "release/current", "base", []string{"feat/*"})
+
+	err := Start(StartOpts{})
+	if err == nil || !strings.Contains(err.Error(), "not a descendant of base") {
+		t.Errorf("expected 'not a descendant of base' error, got: %v", err)
+	}
+
+	// Worktree must not have been created — validation should fail before setup.
+	gitDir, _ := git.Root().GitDir()
+	p := state.Locate(gitDir)
+	if _, err := os.Stat(p.WorktreeDir); !os.IsNotExist(err) {
+		t.Errorf("worktree should not exist after early validation failure")
+		_ = Abort()
 	}
 }
 
