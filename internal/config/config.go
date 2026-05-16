@@ -13,9 +13,8 @@ import (
 const Filename = ".bouquet.yaml"
 
 type Config struct {
-	Target string   `yaml:"target"`
-	Base   string   `yaml:"base"`
-	Merge  []string `yaml:"merge"`
+	Base     string              `yaml:"base"`
+	Branches map[string][]string `yaml:"branches"`
 }
 
 // Load reads and validates the config file at <repoRoot>/.bouquet.yaml.
@@ -34,28 +33,33 @@ func Load(repoRoot string) (*Config, error) {
 	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	if err := c.validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid %s: %w", path, err)
 	}
 	return &c, nil
 }
 
-func (c *Config) validate() error {
-	if strings.TrimSpace(c.Target) == "" {
-		return fmt.Errorf("`target` is required")
-	}
+func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Base) == "" {
 		return fmt.Errorf("`base` is required")
 	}
-	if c.Target == c.Base {
-		return fmt.Errorf("`target` and `base` must differ")
+	if len(c.Branches) == 0 {
+		return fmt.Errorf("`branches` must contain at least one target")
 	}
-	if len(c.Merge) == 0 {
-		return fmt.Errorf("`merge` must contain at least one glob")
-	}
-	for i, p := range c.Merge {
-		if strings.TrimSpace(p) == "" {
-			return fmt.Errorf("`merge[%d]` is empty", i)
+	for target, merge := range c.Branches {
+		if strings.TrimSpace(target) == "" {
+			return fmt.Errorf("branch target name cannot be empty")
+		}
+		if target == c.Base {
+			return fmt.Errorf("branch target %q cannot be the same as base %q", target, c.Base)
+		}
+		if len(merge) == 0 {
+			return fmt.Errorf("branch %q must contain at least one merge glob", target)
+		}
+		for i, p := range merge {
+			if strings.TrimSpace(p) == "" {
+				return fmt.Errorf("branch %q: merge[%d] is empty", target, i)
+			}
 		}
 	}
 	return nil

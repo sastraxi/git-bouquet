@@ -18,10 +18,29 @@ type StartOpts struct {
 	DryRun bool
 }
 
-func Start(opts StartOpts) error {
+func Start(target string, opts StartOpts) error {
 	env, err := Setup()
 	if err != nil {
 		return err
+	}
+
+	if target == "" {
+		if len(env.Config.Branches) == 1 {
+			for t := range env.Config.Branches {
+				target = t
+			}
+		} else {
+			info("multiple target branches configured:")
+			for t := range env.Config.Branches {
+				info("  %s", t)
+			}
+			return fmt.Errorf("please specify a target branch")
+		}
+	}
+
+	mergeGlobs, ok := env.Config.Branches[target]
+	if !ok {
+		return fmt.Errorf("target branch %q not found in config", target)
 	}
 
 	existing, err := state.Load(env.Paths)
@@ -42,12 +61,12 @@ func Start(opts StartOpts) error {
 		}
 	}
 
-	resolved, err := leaves.Resolve(env.Repo, env.Config.Merge, []string{env.Config.Target, env.Config.Base})
+	resolved, err := leaves.Resolve(env.Repo, mergeGlobs, []string{target, env.Config.Base})
 	if err != nil {
 		return err
 	}
 	if len(resolved) == 0 {
-		return fmt.Errorf("no branches matched any pattern in `merge`")
+		return fmt.Errorf("no branches matched any pattern in `merge` for target %q", target)
 	}
 
 	if opts.Pull {
@@ -70,7 +89,7 @@ func Start(opts StartOpts) error {
 
 	// Re-resolve after pull/sync may have updated tips (and possibly created
 	// new ancestor relationships).
-	resolved, err = leaves.Resolve(env.Repo, env.Config.Merge, []string{env.Config.Target, env.Config.Base})
+	resolved, err = leaves.Resolve(env.Repo, mergeGlobs, []string{target, env.Config.Base})
 	if err != nil {
 		return err
 	}
@@ -82,7 +101,7 @@ func Start(opts StartOpts) error {
 	if baseSHA == "" {
 		return fmt.Errorf("base branch %q does not exist", env.Config.Base)
 	}
-	prevTargetSHA, err := env.Repo.RevParse(env.Config.Target)
+	prevTargetSHA, err := env.Repo.RevParse(target)
 	if err != nil {
 		return err
 	}
@@ -110,7 +129,7 @@ func Start(opts StartOpts) error {
 	}
 
 	st := &state.State{
-		Target:        env.Config.Target,
+		Target:        target,
 		Base:          env.Config.Base,
 		BaseSHA:       baseSHA,
 		PrevTargetSHA: prevTargetSHA,
@@ -126,7 +145,7 @@ func Start(opts StartOpts) error {
 		return err
 	}
 
-	info("merging %d leaves into %s:", len(resolved), env.Config.Target)
+	info("merging %d leaves into %s:", len(resolved), target)
 	return runMergeLoop(env, st, opts.DryRun)
 }
 

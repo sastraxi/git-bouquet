@@ -3,82 +3,76 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
 
-func writeConfig(t *testing.T, body string) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, Filename), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
-func TestLoadValid(t *testing.T) {
-	dir := writeConfig(t, `target: release/current
-base: main
-merge:
-  - feat/*
-  - test/*
+func TestLoad(t *testing.T) {
+	dir := writeConfig(t, `base: main
+branches:
+  release/current:
+    - feat/*
+    - fix/*
 `)
+	defer os.RemoveAll(dir)
+
 	c, err := Load(dir)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatal(err)
 	}
-	if c.Target != "release/current" || c.Base != "main" {
-		t.Errorf("target/base: %+v", c)
-	}
-	if len(c.Merge) != 2 {
-		t.Errorf("merge len: %d", len(c.Merge))
-	}
-}
 
-func TestLoadMissing(t *testing.T) {
-	_, err := Load(t.TempDir())
-	if err == nil || !strings.Contains(err.Error(), "no .bouquet.yaml") {
-		t.Errorf("expected missing-file error, got %v", err)
+	if c.Base != "main" {
+		t.Errorf("base: %s", c.Base)
 	}
-}
-
-func TestLoadUnknownField(t *testing.T) {
-	dir := writeConfig(t, `target: t
-base: b
-merge: [x]
-bogus: 1
-`)
-	_, err := Load(dir)
-	if err == nil {
-		t.Error("expected error for unknown field, got nil")
+	if len(c.Branches) != 1 {
+		t.Errorf("branches len: %d", len(c.Branches))
+	}
+	merge := c.Branches["release/current"]
+	if !reflect.DeepEqual(merge, []string{"feat/*", "fix/*"}) {
+		t.Errorf("merge: %v", merge)
 	}
 }
 
 func TestValidate(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
 		name    string
-		c       Config
+		config  Config
 		wantErr string
 	}{
-		{"missing target", Config{Base: "b", Merge: []string{"x"}}, "`target` is required"},
-		{"missing base", Config{Target: "t", Merge: []string{"x"}}, "`base` is required"},
-		{"target==base", Config{Target: "x", Base: "x", Merge: []string{"y"}}, "must differ"},
-		{"empty merge", Config{Target: "t", Base: "b"}, "`merge` must contain"},
-		{"empty merge entry", Config{Target: "t", Base: "b", Merge: []string{"x", "  "}}, "is empty"},
-		{"valid", Config{Target: "t", Base: "b", Merge: []string{"x"}}, ""},
+		{"missing base", Config{Branches: map[string][]string{"t": {"x"}}}, "`base` is required"},
+		{"missing branches", Config{Base: "b"}, "`branches` must contain"},
+		{"empty branch name", Config{Base: "b", Branches: map[string][]string{"": {"x"}}}, "branch target name cannot be empty"},
+		{"target==base", Config{Base: "x", Branches: map[string][]string{"x": {"y"}}}, "cannot be the same as base"},
+		{"empty merge", Config{Base: "b", Branches: map[string][]string{"t": {}}}, "must contain at least one merge glob"},
+		{"empty merge entry", Config{Base: "b", Branches: map[string][]string{"t": {"x", "  "}}}, "is empty"},
+		{"valid", Config{Base: "b", Branches: map[string][]string{"t": {"x"}}}, ""},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.c.validate()
-			if tc.wantErr == "" {
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr == "" {
 				if err != nil {
 					t.Errorf("unexpected error: %v", err)
 				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Errorf("got %v, want substring %q", err, tc.wantErr)
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("expected error %q, got %v", tt.wantErr, err)
+				}
 			}
 		})
 	}
+}
+
+func writeConfig(t *testing.T, content string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "bouquet-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, Filename), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

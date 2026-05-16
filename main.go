@@ -20,19 +20,15 @@ usage:
   git bouquet <command> [flags]
 
 commands:
-  start [--pull] [--sync] [--dry-run]   begin a rebuild
+  start [target] [--pull] [--sync] [--dry-run]
+                                        begin a rebuild for target branch
   continue                              resume after resolving a conflict
   abort                                 cancel in-progress rebuild, clean up
   status                                show progress of in-progress rebuild
-  list                                  print the leaves that would be merged
+  list [target]                         print the leaves that would be merged
 
 config:
   .bouquet.yaml at repo root. See README for schema.
-
-exit codes:
-  0  ok
-  1  general error
-  2  stopped at merge conflict (resolve and run "git bouquet continue")
 `
 
 func main() {
@@ -52,7 +48,8 @@ func main() {
 		fs.BoolVar(&opts.Sync, "sync", false, "run `git town sync -s` on each leaf first")
 		fs.BoolVar(&opts.DryRun, "dry-run", false, "do everything except the final commit")
 		_ = fs.Parse(args)
-		err = workflow.Start(opts)
+		target := fs.Arg(0)
+		err = workflow.Start(target, opts)
 	case "continue":
 		err = workflow.Continue()
 	case "abort":
@@ -60,7 +57,10 @@ func main() {
 	case "status":
 		err = workflow.Status()
 	case "list":
-		err = workflow.List()
+		fs := flag.NewFlagSet("list", flag.ExitOnError)
+		_ = fs.Parse(args)
+		target := fs.Arg(0)
+		err = workflow.List(target)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return

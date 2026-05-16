@@ -29,12 +29,7 @@ func Abort() error {
 	if err := state.Clear(env.Paths); err != nil {
 		return err
 	}
-	info("aborted; %s left untouched", func() string {
-		if st != nil {
-			return st.Target
-		}
-		return env.Config.Target
-	}())
+	info("aborted; integration branch left untouched")
 	return nil
 }
 

@@ -17,7 +17,11 @@ func Status() error {
 	}
 	if st == nil {
 		info("no rebuild in progress")
-		info("config: target=%s base=%s", env.Config.Target, env.Config.Base)
+		info("config: base=%s", env.Config.Base)
+		info("targets:")
+		for t := range env.Config.Branches {
+			info("  %s", t)
+		}
 		return nil
 	}
 	info("rebuild in progress for %s (base %s @ %s)", st.Target, st.Base, shortSHA(st.BaseSHA))

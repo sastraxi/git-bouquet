@@ -16,10 +16,10 @@ cat .bouquet.yaml
 ```
 
 This tells you:
-- `target` — the integration branch being maintained
 - `base` — the stable upstream branch all leaves descend from
-- `merge` — the ordered list of leaf globs (order matters for rerere; do not
-  reorder without telling the user)
+- `branches` — a map of target integration branches to their leaf globs (order matters for rerere; do not reorder without telling the user)
+
+**Identify the target branch.** If multiple targets exist, ask the user which one they want to work on.
 
 **Check the existing target.**
 
@@ -32,8 +32,8 @@ git show <target>                     # latest bouquet commit message lists leav
 
 ```sh
 git log --oneline -5 <base>
-for each leaf in merge list:
-  git log --oneline <base>..<leaf>   # commits unique to this leaf
+# for each leaf in the target's merge list:
+git log --oneline <base>..<leaf>      # commits unique to this leaf
 ```
 
 **If `git town` is installed**, use it to understand the branch graph. Filter
@@ -56,7 +56,7 @@ bouquet, which are unchanged, and what the user is about to rebuild.
 ## Phase 2 — Run the rebuild
 
 ```sh
-git bouquet start
+git bouquet start [target]
 ```
 
 Add `--pull` if the user wants to fast-forward `base` and any leaves that
@@ -106,7 +106,7 @@ in the leaf itself, not in a merge resolution.
 3. Check out that branch and commit a fix.
 4. If using git town, sync forward: `git town sync -s <fixed-branch>` to
    propagate the fix down to all descendants that depend on it.
-5. Rerun `git bouquet start` (the conflict should now be gone or the rerere
+5. Rerun `git bouquet start [target]` (the conflict should now be gone or the rerere
    cache will replay correctly).
 
 ---
@@ -141,7 +141,7 @@ build stops at this conflict for human review:
 ```sh
 rm -rf .git/rr-cache/<hash>
 git bouquet abort
-git bouquet start   # will conflict again and stop for you to resolve manually
+git bouquet start [target]   # will conflict again and stop for you to resolve manually
 ```
 
 When you resolve it manually this time, rerere records the new (correct)

@@ -1,6 +1,6 @@
 # git-bouquet
 
-Maintain a long-lived integration branch by merging a curated list of feature
+Maintain one or more long-lived integration branches by merging a curated list of feature
 branches into a fresh checkout of an upstream base and recording the result
 as a single linear commit on the integration branch.
 
@@ -22,12 +22,15 @@ This puts a `git-bouquet` binary on your `PATH`, which makes it available as
 Add a `.bouquet.yaml` to the root of your repo:
 
 ```yaml
-target: release/current   # branch to commit the snapshot to
-base:   main              # branch to start each rebuild from
-merge:                    # globs; expanded against local branch names
-  - feat/*
-  - test/*
-  - "!feat/wip-*"           # gitignore-style negation drops matches
+base: main              # branch to start each rebuild from
+branches:
+  release/current:      # target branch name
+    - feat/*
+    - test/*
+    - "!feat/wip-*"     # gitignore-style negation drops matches
+  integration/tuner:    # another target branch
+    - feat/new-tuner
+    - test/initial
 ```
 
 To gate releases on tests, run them yourself after `git bouquet start`
@@ -37,8 +40,8 @@ moves the branch back one rebuild.
 Then:
 
 ```sh
-git bouquet list                      # show what would be merged, in order
-git bouquet start [--pull] [--sync]   # rebuild
+git bouquet list [target]             # show what would be merged, in order
+git bouquet start [target] [--pull]   # rebuild (target optional if only one exists)
 git bouquet continue                  # after resolving a conflict
 git bouquet abort                     # bail out
 git bouquet status                    # where are we
@@ -80,7 +83,7 @@ on `base` (or on another leaf that is itself rooted on `base`, transitively).
 Leaves that were originally branched from `base` but have since been rebased
 or fast-forwarded by `git town sync` continue to satisfy the constraint.
 
-The **order** of leaves in `merge:` is your responsibility — it determines
+The **order** of leaves in `branches[target]` is your responsibility — it determines
 which side of each conflict is "ours" vs "theirs," and changing the order
 invalidates `rerere` cache entries.
 

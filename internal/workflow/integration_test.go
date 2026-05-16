@@ -65,9 +65,9 @@ func setupRepo(t *testing.T, base string, branches map[string]map[string]string)
 
 func writeBouquetYAML(t *testing.T, dir, target, base string, merge []string) {
 	t.Helper()
-	body := "target: " + target + "\nbase: " + base + "\nmerge:\n"
+	body := "base: " + base + "\nbranches:\n  " + target + ":\n"
 	for _, m := range merge {
-		body += "  - " + m + "\n"
+		body += "    - " + m + "\n"
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".bouquet.yaml"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestStart_HappyPath(t *testing.T) {
 	})
 	writeBouquetYAML(t, dir, "release/current", "main", []string{"feat/*"})
 
-	if err := Start(StartOpts{}); err != nil {
+	if err := Start("", StartOpts{}); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
@@ -137,12 +137,12 @@ func TestStart_NoopWhenTreeUnchanged(t *testing.T) {
 	})
 	writeBouquetYAML(t, dir, "release/current", "main", []string{"feat/*"})
 
-	if err := Start(StartOpts{}); err != nil {
+	if err := Start("", StartOpts{}); err != nil {
 		t.Fatalf("first Start: %v", err)
 	}
 	sha1 := mustHead(t, "release/current")
 
-	if err := Start(StartOpts{}); err != nil {
+	if err := Start("", StartOpts{}); err != nil {
 		t.Fatalf("second Start: %v", err)
 	}
 	sha2 := mustHead(t, "release/current")
@@ -158,12 +158,12 @@ func TestStart_Idempotent(t *testing.T) {
 	})
 	writeBouquetYAML(t, dir, "release/current", "main", []string{"feat/*"})
 
-	if err := Start(StartOpts{}); err != nil {
+	if err := Start("", StartOpts{}); err != nil {
 		t.Fatalf("first Start: %v", err)
 	}
 	tree1, _ := git.Root().Output("rev-parse", "release/current^{tree}")
 
-	if err := Start(StartOpts{}); err != nil {
+	if err := Start("", StartOpts{}); err != nil {
 		t.Fatalf("second Start: %v", err)
 	}
 	tree2, _ := git.Root().Output("rev-parse", "release/current^{tree}")
@@ -179,7 +179,7 @@ func TestStart_DryRun_DoesNotUpdateTarget(t *testing.T) {
 	})
 	writeBouquetYAML(t, dir, "release/current", "main", []string{"feat/*"})
 
-	if err := Start(StartOpts{DryRun: true}); err != nil {
+	if err := Start("", StartOpts{DryRun: true}); err != nil {
 		t.Fatalf("Start dry-run: %v", err)
 	}
 	if sha := mustHead(t, "release/current"); sha != "" {
@@ -204,7 +204,7 @@ func TestStart_Conflict_then_Continue(t *testing.T) {
 	})
 	writeBouquetYAML(t, dir, "release/current", "main", []string{"feat/*"})
 
-	err := Start(StartOpts{})
+	err := Start("", StartOpts{})
 	if !IsConflict(err) {
 		t.Fatalf("expected conflict, got %v", err)
 	}
@@ -248,7 +248,7 @@ func TestStart_Conflict_then_Abort(t *testing.T) {
 	})
 	writeBouquetYAML(t, dir, "release/current", "main", []string{"feat/*"})
 
-	err := Start(StartOpts{})
+	err := Start("", StartOpts{})
 	if !IsConflict(err) {
 		t.Fatalf("expected conflict, got %v", err)
 	}
@@ -279,12 +279,12 @@ func TestStart_RefusesWhenStateExists(t *testing.T) {
 	})
 	writeBouquetYAML(t, dir, "release/current", "main", []string{"feat/*"})
 
-	if err := Start(StartOpts{}); !IsConflict(err) {
+	if err := Start("", StartOpts{}); !IsConflict(err) {
 		t.Fatalf("setup: expected conflict, got %v", err)
 	}
 	defer Abort()
 
-	err := Start(StartOpts{})
+	err := Start("", StartOpts{})
 	if err == nil || !strings.Contains(err.Error(), "already in progress") {
 		t.Errorf("expected 'already in progress' error, got %v", err)
 	}
@@ -317,7 +317,7 @@ func TestList_AfterTrim(t *testing.T) {
 
 	writeBouquetYAML(t, dir, "release/current", "main", []string{"feat/*"})
 
-	if err := List(); err != nil {
+	if err := List(""); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 }
@@ -357,7 +357,7 @@ func TestStart_RerereReplay(t *testing.T) {
 	writeBouquetYAML(t, dir, "release/current", "main", []string{"feat/*"})
 
 	// First rebuild: hit conflict, resolve, continue.
-	if err := Start(StartOpts{}); !IsConflict(err) {
+	if err := Start("", StartOpts{}); !IsConflict(err) {
 		t.Fatalf("first Start: expected conflict, got %v", err)
 	}
 	gitDir, _ := git.Root().GitDir()
@@ -378,7 +378,7 @@ func TestStart_RerereReplay(t *testing.T) {
 	}
 
 	// Second rebuild: same conflict recurs, but rerere should auto-apply.
-	if err := Start(StartOpts{}); err != nil {
+	if err := Start("", StartOpts{}); err != nil {
 		t.Fatalf("second Start should complete via rerere replay, got: %v", err)
 	}
 
@@ -399,7 +399,7 @@ func TestStatus_InProgress(t *testing.T) {
 	})
 	writeBouquetYAML(t, dir, "release/current", "main", []string{"feat/*"})
 
-	if err := Start(StartOpts{}); !IsConflict(err) {
+	if err := Start("", StartOpts{}); !IsConflict(err) {
 		t.Fatalf("setup: expected conflict, got %v", err)
 	}
 	defer Abort()
@@ -417,7 +417,7 @@ func TestContinue_StillUnmerged(t *testing.T) {
 	})
 	writeBouquetYAML(t, dir, "release/current", "main", []string{"feat/*"})
 
-	if err := Start(StartOpts{}); !IsConflict(err) {
+	if err := Start("", StartOpts{}); !IsConflict(err) {
 		t.Fatalf("setup: expected conflict, got %v", err)
 	}
 	defer Abort()
@@ -486,7 +486,7 @@ func modifyDeleteRepo(t *testing.T, deleterFirst bool) string {
 func TestStart_DeletedByUs_AutoResolved(t *testing.T) {
 	// DU: deleter merged first → worktree has no old.py, modifier tries to add changes.
 	_ = modifyDeleteRepo(t, true)
-	if err := Start(StartOpts{}); err != nil {
+	if err := Start("", StartOpts{}); err != nil {
 		t.Fatalf("Start should auto-resolve DU conflict, got: %v", err)
 	}
 	if out, err := exec.Command("git", "show", "release/current:old.py").Output(); err == nil {
@@ -497,7 +497,7 @@ func TestStart_DeletedByUs_AutoResolved(t *testing.T) {
 func TestStart_DeletedByThem_AutoResolved(t *testing.T) {
 	// UD: modifier merged first → worktree has old.py, deleter branch removes it.
 	_ = modifyDeleteRepo(t, false)
-	if err := Start(StartOpts{}); err != nil {
+	if err := Start("", StartOpts{}); err != nil {
 		t.Fatalf("Start should auto-resolve UD conflict, got: %v", err)
 	}
 	if out, err := exec.Command("git", "show", "release/current:old.py").Output(); err == nil {
@@ -547,7 +547,7 @@ func TestStart_Pull_DoesNotDirtyMainWorktree(t *testing.T) {
 
 	writeBouquetYAML(t, repo, "release/current", "main", []string{"feat/*"})
 
-	if err := Start(StartOpts{Pull: true}); err != nil {
+	if err := Start("", StartOpts{Pull: true}); err != nil {
 		t.Fatalf("Start --pull: %v", err)
 	}
 
@@ -629,7 +629,7 @@ func TestStart_LeafNotDescendantOfBase_Rejected(t *testing.T) {
 	run("checkout", "-q", "base")
 	writeBouquetYAML(t, dir, "release/current", "base", []string{"feat/*"})
 
-	err := Start(StartOpts{})
+	err := Start("", StartOpts{})
 	if err == nil || !strings.Contains(err.Error(), "not a descendant of base") {
 		t.Errorf("expected 'not a descendant of base' error, got: %v", err)
 	}
@@ -640,6 +640,40 @@ func TestStart_LeafNotDescendantOfBase_Rejected(t *testing.T) {
 	if _, err := os.Stat(p.WorktreeDir); !os.IsNotExist(err) {
 		t.Errorf("worktree should not exist after early validation failure")
 		_ = Abort()
+	}
+}
+
+func TestStart_MultipleBranches(t *testing.T) {
+	dir := setupRepo(t, "main", map[string]map[string]string{
+		"feat/a": {"a.txt": "alpha\n"},
+		"feat/b": {"b.txt": "bravo\n"},
+	})
+	
+	// Write config with two targets
+	body := "base: main\nbranches:\n  target1:\n    - feat/a\n  target2:\n    - feat/b\n"
+	if err := os.WriteFile(filepath.Join(dir, ".bouquet.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Starting without target should fail
+	if err := Start("", StartOpts{}); err == nil || !strings.Contains(err.Error(), "please specify a target branch") {
+		t.Errorf("expected error for missing target with multiple branches, got %v", err)
+	}
+
+	// Start target1
+	if err := Start("target1", StartOpts{}); err != nil {
+		t.Fatalf("Start target1: %v", err)
+	}
+	if sha := mustHead(t, "target1"); sha == "" {
+		t.Fatal("target1 not created")
+	}
+
+	// Start target2
+	if err := Start("target2", StartOpts{}); err != nil {
+		t.Fatalf("Start target2: %v", err)
+	}
+	if sha := mustHead(t, "target2"); sha == "" {
+		t.Fatal("target2 not created")
 	}
 }
 
